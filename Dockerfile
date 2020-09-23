@@ -1,22 +1,46 @@
-FROM alpine:edge
-MAINTAINER ZZROT LLC <docker@zzrot.com>
+#
+# Builder
+#
+FROM abiosoft/caddy:builder as builder
 
-RUN apk --no-cache add tini git openssh-client \
-    && apk --no-cache add --virtual devs tar curl
+ARG version="0.11.3"
+ARG plugins="expires,cors"
 
-#Install Caddy Server, and All Middleware
-RUN curl "https://caddyserver.com/download/build?os=linux&arch=amd64&features=DNS%2Cawslambda%2Ccors%2Cexpires%2Cfilemanager%2Cgit%2Chugo%2Cipfilter%2Cjsonp%2Cjwt%2Clocale%2Cmailout%2Cminify%2Cmultipass%2Cprometheus%2Cratelimit%2Crealip%2Csearch%2Cupload%2Ccloudflare%2Cdigitalocean%2Cdnsimple%2Cdyn%2Cgandi%2Cgooglecloud%2Clinode%2Cnamecheap%2Crfc2136%2Croute53%2Cvultr" \
-    | tar --no-same-owner -C /usr/bin/ -xz caddy
+# process wrapper
+RUN go get -v github.com/abiosoft/parent
 
-#Remove build devs
-RUN apk del devs
+RUN VERSION=${version} PLUGINS=${plugins} /bin/sh /usr/bin/builder.sh
 
-#Copy over a default Caddyfile
-COPY ./Caddyfile /etc/Caddyfile
+#
+# Final stage
+#
+FROM alpine:3.9
+MAINTAINER FactAi <github@fact.ai>
 
-#USER caddy
+ARG version="0.11.3"
+LABEL caddy_version="$version"
 
-ENTRYPOINT ["/sbin/tini"]
+# Let's Encrypt Agreement
+ENV ACME_AGREE="false"
 
-CMD ["caddy", "-quic", "--conf", "/etc/Caddyfile"]
+RUN apk add --no-cache openssh-client git
 
+# install caddy
+COPY --from=builder /install/caddy /usr/bin/caddy
+
+# validate install
+RUN /usr/bin/caddy -version
+RUN /usr/bin/caddy -plugins
+
+EXPOSE 80 443 2015
+VOLUME /root/.caddy /srv
+WORKDIR /srv
+
+COPY Caddyfile /etc/Caddyfile
+COPY index.html /srv/index.html
+
+# install process wrapper
+COPY --from=builder /go/bin/parent /bin/parent
+
+ENTRYPOINT ["/bin/parent", "caddy"]
+CMD ["--conf", "/etc/Caddyfile", "--log", "stdout", "--agree=$ACME_AGREE"]
